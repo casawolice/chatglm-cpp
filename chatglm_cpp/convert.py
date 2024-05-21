@@ -14,7 +14,8 @@ import torch
 import torch.nn.functional as F
 from tabulate import tabulate
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoTokenizer
+from transformers import (AutoConfig, AutoModel, AutoModelForCausalLM,
+                          AutoTokenizer)
 
 GGML_QK8_0 = 32
 GGML_QK4_0 = 32
@@ -85,7 +86,9 @@ def quantize_q4_1(tensor: torch.Tensor) -> torch.Tensor:
     # compress two int4 weights into an int8
     tensor = tensor[:, :16] | (tensor[:, 16:] << 4)
     # add scale & min into each block
-    tensor = torch.cat((scale.half().view(torch.int8), min_vals.half().view(torch.int8), tensor), dim=-1)
+    tensor = torch.cat((scale.half().view(torch.int8), min_vals.half().view(
+        torch.int8), tensor),
+                       dim=-1)
     return tensor
 
 
@@ -103,7 +106,9 @@ def quantize_q5_0(tensor: torch.Tensor) -> torch.Tensor:
         qh |= ((tensor[:, i] & 0x10) >> 4).int() << i
 
     # add scale into each block
-    tensor = torch.cat((scale.half().view(torch.int8), qh[..., None].view(torch.int8), qs), dim=-1)
+    tensor = torch.cat(
+        (scale.half().view(torch.int8), qh[..., None].view(torch.int8), qs),
+        dim=-1)
     return tensor
 
 
@@ -121,9 +126,9 @@ def quantize_q5_1(tensor: torch.Tensor) -> torch.Tensor:
         qh |= ((tensor[:, i] & 0x10) >> 4).int() << i
 
     # add scale & min into each block
-    tensor = torch.cat(
-        (scale.half().view(torch.int8), min_vals.half().view(torch.int8), qh[..., None].view(torch.int8), qs), dim=-1
-    )
+    tensor = torch.cat((scale.half().view(torch.int8), min_vals.half().view(
+        torch.int8), qh[..., None].view(torch.int8), qs),
+                       dim=-1)
     return tensor
 
 
@@ -133,7 +138,9 @@ def dump_tensor(f, name: str, tensor: torch.Tensor, ggml_type: GGMLType):
     f.write(name.encode())
 
     # tensor shape & dtype
-    f.write(struct.pack("i" * (2 + tensor.ndim), tensor.ndim, *tensor.shape, ggml_type.value))
+    f.write(
+        struct.pack("i" * (2 + tensor.ndim), tensor.ndim, *tensor.shape,
+                    ggml_type.value))
 
     # tensor data
     if ggml_type == GGMLType.F32:
@@ -151,10 +158,12 @@ def dump_tensor(f, name: str, tensor: torch.Tensor, ggml_type: GGMLType):
     elif ggml_type == GGMLType.Q5_1:
         tensor = quantize_q5_1(tensor)
     else:
-        raise NotImplementedError(f"Cannot dump tensor of dtype {tensor.dtype}")
+        raise NotImplementedError(
+            f"Cannot dump tensor of dtype {tensor.dtype}")
 
     # align address
-    aligned_pos = (f.tell() + (GGML_MEM_ALIGN - 1)) // GGML_MEM_ALIGN * GGML_MEM_ALIGN
+    aligned_pos = (f.tell() +
+                   (GGML_MEM_ALIGN - 1)) // GGML_MEM_ALIGN * GGML_MEM_ALIGN
     f.seek(aligned_pos)
     tensor.numpy().tofile(f)
 
@@ -171,13 +180,15 @@ def dump_state_dict(f, weight_names, state_dict, quantization_bit, ggml_type):
             # step 1: de-quantize it back to float32
             if tensor.dtype == torch.int8:
                 assert quantization_bit in [4, 8]
-                scale = state_dict[f"{name}_scale"].float()  # channel-wise scale
+                scale = state_dict[f"{name}_scale"].float(
+                )  # channel-wise scale
 
                 if quantization_bit == 4:
                     # convert int4 weight to int8
                     low_bits = ((tensor << 4) & 0xF0) >> 4
                     high_bits = (tensor & 0xF0) >> 4
-                    tensor = torch.stack((high_bits, low_bits), dim=-1).view(tensor.shape[0], -1)
+                    tensor = torch.stack((high_bits, low_bits),
+                                         dim=-1).view(tensor.shape[0], -1)
                 tensor = tensor * scale[:, None]
             else:
                 tensor = tensor.float()
@@ -193,10 +204,14 @@ def dump_state_dict(f, weight_names, state_dict, quantization_bit, ggml_type):
         dump_tensor(f, name, tensor, tensor_ggml_type)
         tensor_info.append((name, tuple(tensor.shape), tensor_ggml_type.name))
 
-    print(tabulate(tensor_info, headers=["name", "shape", "dtype"], tablefmt="psql"))
+    print(
+        tabulate(tensor_info,
+                 headers=["name", "shape", "dtype"],
+                 tablefmt="psql"))
 
 
 class BaseConverter:
+
     @classmethod
     def convert(cls, f, model, tokenizer, ggml_type):
         f.write(b"ggml")  # magic
@@ -206,16 +221,14 @@ class BaseConverter:
         cls.dump_model(f, model, ggml_type)
 
 
-def get_prefix_cache(prefix_encoder, pre_seq_len, num_layers, num_kv_heads, head_size):
+def get_prefix_cache(prefix_encoder, pre_seq_len, num_layers, num_kv_heads,
+                     head_size):
     prefix_tokens = torch.arange(pre_seq_len, dtype=torch.long)
     with torch.no_grad():
         past_key_values = prefix_encoder(prefix_tokens)
-    past_key_values = (
-        past_key_values.to(torch.half)
-        .view(pre_seq_len, num_layers * 2, num_kv_heads, head_size)
-        .permute(1, 2, 0, 3)
-        .contiguous()
-    )
+    past_key_values = (past_key_values.to(torch.half).view(
+        pre_seq_len, num_layers * 2, num_kv_heads,
+        head_size).permute(1, 2, 0, 3).contiguous())
     return past_key_values
 
 
@@ -249,14 +262,16 @@ class ChatGLMConverter(BaseConverter):
 
     @staticmethod
     def dump_tokenizer(f, tokenizer):
-        serialized_model_proto = tokenizer.sp_tokenizer.text_tokenizer.sp.serialized_model_proto()
+        serialized_model_proto = tokenizer.sp_tokenizer.text_tokenizer.sp.serialized_model_proto(
+        )
         f.write(struct.pack("i", len(serialized_model_proto)))
         f.write(serialized_model_proto)
 
     @staticmethod
     def dump_model(f, model, ggml_type):
         assert torch.allclose(
-            model.state_dict()["transformer.word_embeddings.weight"], model.state_dict()["lm_head.weight"]
+            model.state_dict()["transformer.word_embeddings.weight"],
+            model.state_dict()["lm_head.weight"]
         ), "unimplemented: lm_head weight must be tied to input embedding"
 
         weight_names = ["transformer.word_embeddings.weight"]
@@ -279,7 +294,8 @@ class ChatGLMConverter(BaseConverter):
             "transformer.final_layernorm.weight",
             "transformer.final_layernorm.bias",
         ]
-        dump_state_dict(f, weight_names, model.state_dict(), model.config.quantization_bit, ggml_type)
+        dump_state_dict(f, weight_names, model.state_dict(),
+                        model.config.quantization_bit, ggml_type)
 
 
 class ChatGLM2Converter(BaseConverter):
@@ -292,9 +308,9 @@ class ChatGLM2Converter(BaseConverter):
         assert (
             config.apply_residual_connection_post_layernorm is False
         ), "unimplemented: apply_residual_connection_post_layernorm must be false"
-        assert (
-            config.kv_channels * config.num_attention_heads == config.hidden_size
-        ), "unimplemented: invalid kv_channels"
+        assert (config.kv_channels *
+                config.num_attention_heads == config.hidden_size
+                ), "unimplemented: invalid kv_channels"
         assert config.multi_query_attention is True, "unimplemented: multi_query_attention must be true"
         assert config.original_rope is True, "unimplemented: original_rope must be true"
         assert config.post_layer_norm is True, "unimplemented: post_layer_norm must be true"
@@ -321,7 +337,8 @@ class ChatGLM2Converter(BaseConverter):
 
     @staticmethod
     def dump_tokenizer(f, tokenizer):
-        serialized_model_proto = tokenizer.tokenizer.sp_model.serialized_model_proto()
+        serialized_model_proto = tokenizer.tokenizer.sp_model.serialized_model_proto(
+        )
         f.write(struct.pack("i", len(serialized_model_proto)))
         f.write(serialized_model_proto)
 
@@ -358,7 +375,8 @@ class ChatGLM2Converter(BaseConverter):
             "transformer.encoder.final_layernorm.weight",
             "transformer.output_layer.weight",
         ]
-        dump_state_dict(f, weight_names, state_dict, config.quantization_bit, ggml_type)
+        dump_state_dict(f, weight_names, state_dict, config.quantization_bit,
+                        ggml_type)
 
 
 class ChatGLM3Converter(ChatGLM2Converter):
@@ -366,6 +384,7 @@ class ChatGLM3Converter(ChatGLM2Converter):
 
 
 class BaichuanConverter(BaseConverter):
+
     @classmethod
     def dump_config(cls, f, config, ggml_type):
         assert config.hidden_act == "silu", "unimplemented: hidden_act must be silu"
@@ -385,7 +404,9 @@ class BaichuanConverter(BaseConverter):
             config.sep_token_id if config.sep_token_id is not None else -1,
         ]
 
-        f.write(struct.pack("i" * (1 + len(config_values)), config_version, *config_values))
+        f.write(
+            struct.pack("i" * (1 + len(config_values)), config_version,
+                        *config_values))
 
     @staticmethod
     def dump_tokenizer(f, tokenizer):
@@ -415,7 +436,11 @@ class BaichuanConverter(BaseConverter):
             # For Baichuan2, normalize lm_head weight
             model.lm_head.weight.data = F.normalize(model.lm_head.weight.data)
 
-        dump_state_dict(f, weight_names, model.state_dict(), quantization_bit=None, ggml_type=ggml_type)
+        dump_state_dict(f,
+                        weight_names,
+                        model.state_dict(),
+                        quantization_bit=None,
+                        ggml_type=ggml_type)
 
 
 class Baichuan7BConverter(BaichuanConverter):
@@ -448,7 +473,9 @@ class InternLMConverter(BaseConverter):
             config.sep_token_id if config.sep_token_id is not None else -1,
         ]
 
-        f.write(struct.pack("i" * (1 + len(config_values)), config_version, *config_values))
+        f.write(
+            struct.pack("i" * (1 + len(config_values)), config_version,
+                        *config_values))
 
     @staticmethod
     def dump_tokenizer(f, tokenizer):
@@ -460,28 +487,39 @@ class InternLMConverter(BaseConverter):
     def dump_model(f, model, ggml_type):
         state_dict = model.state_dict()
         for i in range(model.config.num_hidden_layers):
-            state_dict[f"model.layers.{i}.self_attn.qkv_proj.weight"] = torch.cat(
-                (
-                    state_dict[f"model.layers.{i}.self_attn.q_proj.weight"],
-                    state_dict[f"model.layers.{i}.self_attn.k_proj.weight"],
-                    state_dict[f"model.layers.{i}.self_attn.v_proj.weight"],
-                ),
-                dim=0,
-            )
-            if model.config.bias:
-                state_dict[f"model.layers.{i}.self_attn.qkv_proj.bias"] = torch.cat(
+            state_dict[
+                f"model.layers.{i}.self_attn.qkv_proj.weight"] = torch.cat(
                     (
-                        state_dict[f"model.layers.{i}.self_attn.q_proj.bias"],
-                        state_dict[f"model.layers.{i}.self_attn.k_proj.bias"],
-                        state_dict[f"model.layers.{i}.self_attn.v_proj.bias"],
+                        state_dict[
+                            f"model.layers.{i}.self_attn.q_proj.weight"],
+                        state_dict[
+                            f"model.layers.{i}.self_attn.k_proj.weight"],
+                        state_dict[
+                            f"model.layers.{i}.self_attn.v_proj.weight"],
                     ),
                     dim=0,
                 )
+            if model.config.bias:
+                state_dict[
+                    f"model.layers.{i}.self_attn.qkv_proj.bias"] = torch.cat(
+                        (
+                            state_dict[
+                                f"model.layers.{i}.self_attn.q_proj.bias"],
+                            state_dict[
+                                f"model.layers.{i}.self_attn.k_proj.bias"],
+                            state_dict[
+                                f"model.layers.{i}.self_attn.v_proj.bias"],
+                        ),
+                        dim=0,
+                    )
 
         weight_names = ["model.embed_tokens.weight"]
         for i in range(model.config.num_hidden_layers):
-            optional_qkv_proj_bias = [f"model.layers.{i}.self_attn.qkv_proj.bias"] if model.config.bias else []
-            optional_o_proj_bias = [f"model.layers.{i}.self_attn.o_proj.bias"] if model.config.bias else []
+            optional_qkv_proj_bias = [
+                f"model.layers.{i}.self_attn.qkv_proj.bias"
+            ] if model.config.bias else []
+            optional_o_proj_bias = [f"model.layers.{i}.self_attn.o_proj.bias"
+                                    ] if model.config.bias else []
             weight_names += [
                 f"model.layers.{i}.input_layernorm.weight",
                 f"model.layers.{i}.self_attn.qkv_proj.weight",
@@ -498,23 +536,35 @@ class InternLMConverter(BaseConverter):
             "lm_head.weight",
         ]
 
-        dump_state_dict(f, weight_names, state_dict, quantization_bit=None, ggml_type=ggml_type)
+        dump_state_dict(f,
+                        weight_names,
+                        state_dict,
+                        quantization_bit=None,
+                        ggml_type=ggml_type)
 
 
-def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optional[str] = None, dtype: str = "q4_0"):
+def convert(f: BinaryIO,
+            model_name_or_path: str,
+            lora_model_name_or_path: Optional[str] = None,
+            dtype: str = "q4_0"):
     ggml_type = GGMLType[dtype.upper()]
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path,
+                                              trust_remote_code=True)
 
-    config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(model_name_or_path,
+                                        trust_remote_code=True)
     if "AutoModel" in config.auto_map:
         auto_model_class = AutoModel
     elif "AutoModelForCausalLM" in config.auto_map:
         auto_model_class = AutoModelForCausalLM
     else:
-        raise RuntimeError(f"Cannot find auto model class to load {model_name_or_path}")
+        raise RuntimeError(
+            f"Cannot find auto model class to load {model_name_or_path}")
 
-    model = auto_model_class.from_pretrained(model_name_or_path, trust_remote_code=True, low_cpu_mem_usage=True)
+    model = auto_model_class.from_pretrained(model_name_or_path,
+                                             trust_remote_code=True,
+                                             low_cpu_mem_usage=True)
 
     if lora_model_name_or_path is not None:
         from peft import PeftModel
@@ -561,9 +611,11 @@ def main():
         type=str,
         help="Lora model name or path used in PeftModel.from_pretrained",
     )
-    parser.add_argument(
-        "-o", "--save_path", default="models/chatglm-ggml.bin", type=Path, help="Path to save the generated GGML model"
-    )
+    parser.add_argument("-o",
+                        "--save_path",
+                        default="models/chatglm-ggml.bin",
+                        type=Path,
+                        help="Path to save the generated GGML model")
     parser.add_argument(
         "-t",
         "--type",
@@ -575,7 +627,11 @@ def main():
     args = parser.parse_args()
 
     with open(args.save_path, "wb") as f:
-        convert(f, args.model_name_or_path, args.lora_model_name_or_path, dtype=args.type)
+
+        convert(f,
+                args.model_name_or_path,
+                args.lora_model_name_or_path,
+                dtype=args.type)
 
     print(f"GGML model saved to {args.save_path}")
 
