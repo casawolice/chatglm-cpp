@@ -1,7 +1,7 @@
 {
   "alpha_pattern": {},
   "auto_mapping": null,
-  "base_model_name_or_path": "/mnt/workspace/.cache/modelscope/ZhipuAI/chatglm3-6b",
+  "base_model_name_or_path": "/Users/ragin/.cache/modelscope/hub/ZhipuAI/chatglm3-6b",
   "bias": "none",
   "fan_in_fan_out": false,
   "inference_mode": true,
